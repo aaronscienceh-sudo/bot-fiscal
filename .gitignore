@@ -1,0 +1,23 @@
+.git/
+tests/
+*.db
+*.log
+node_modules/
+__pycache__/
+*.pyc
+# Segredos
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Relatórios gerados (mantém os de exemplo?)
+data/reports/*.csv
+data/reports/*.md
+
+# SO
+.DS_Store
