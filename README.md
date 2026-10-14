@@ -7,7 +7,7 @@ Bot de Telegram que automatiza rotinas fiscais: busca notas fiscais no e-mail, c
 - **Notas do e-mail:** busca as notas do mês escolhido (inclusive quando a nota vem em link) e já envia com os impostos calculados.
 - **Cálculo de impostos:** calcula apenas os impostos aplicáveis à nota enviada (ex.: ISS, ICMS, DIFAL).
 - **Conciliação:** cruza notas e faturas com o extrato e sinaliza divergências, faturas sem pagamento, pagamentos duplicados e atrasos.
-- **Dúvidas fiscais:** respostas baseadas em uma base de conhecimento própria (`knowledge/`), sem LLM, para ter mais assertividade.
+- **Dúvidas fiscais:** primeiro responde com regras determinísticas da base própria (knowledge/); para perguntas livres, usa o LLM local com essas regras como contexto.
 
 ## Tecnologias
 
