@@ -6,14 +6,18 @@ de POA, vou pagar DIFAL?" — a partir de:
 
   * origem/destino (estados, por cidade ou UF citada no texto);
   * natureza da operação (serviço LC 116/2003 x mercadoria);
-  * destinatário (empresa/contribuinte x pessoa física).
+  * destinatário (1) revenda — contribuinte, sem DIFAL; (2) uso/consumo ou
+    ativo imobilizado — contribuinte, com DIFAL recolhido pelo destinatário;
+    (3) pessoa física/não contribuinte — com DIFAL recolhido pelo remetente.
 
 Determinístico (funciona sem LLM):
   * serviço (LC 116/2003) -> NÃO incide DIFAL; ISS no município do tomador;
   * operação interna (mesmo estado) -> NÃO incide DIFAL;
   * mercadoria interestadual -> DIFAL = alíquota interna do destino −
-    interestadual (4%/7%/12%); destinatário não contribuinte -> MOC
-    (cobrança por antecipação pelo destino).
+    interestadual (ver ``icms_rates.aliquota_interestadual``: 4% importados,
+    7% Sul/Sudeste -> Norte/Nordeste/Centro-Oeste/ES, 12% os demais casos);
+    venda a consumidor final não contribuinte -> destino cobra por
+    antecipação.
 """
 from __future__ import annotations
 
@@ -21,7 +25,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .rules import normalize_name
+from .icms_rates import INTERNAL_RATES, aliquota_interestadual
+from .rules import normalize_name, strip_accents
 
 
 # --------------------------------------------------------------------------- #
@@ -155,25 +160,9 @@ CITY_DISPLAY = {
 }
 
 # --------------------------------------------------------------------------- #
-# Alíquotas de ICMS (valores de referência)
+# Alíquotas de ICMS: a regra interestadual é ÚNICA e mora em icms_rates.py
 # --------------------------------------------------------------------------- #
-# Alíquota interna padrão (%) por UF — apenas estados com padrão conhecido
-# (Pará fica de fora: alíquota varia por produto).
-_INTERNAL_RATES: dict[str, Decimal] = {
-    "SP": Decimal("18"), "MG": Decimal("18"), "RJ": Decimal("22"),
-    "PR": Decimal("18"), "SC": Decimal("17"), "RS": Decimal("17"),
-    "BA": Decimal("18"), "PE": Decimal("18"), "CE": Decimal("18"),
-    "DF": Decimal("18"), "GO": Decimal("17"), "ES": Decimal("18"),
-    "MS": Decimal("17"), "MT": Decimal("17"), "MA": Decimal("21"),
-    "PI": Decimal("20"), "AM": Decimal("20"), "AP": Decimal("20"),
-    "RR": Decimal("19"), "AC": Decimal("19"), "AL": Decimal("17"),
-    "PB": Decimal("19"), "RN": Decimal("18"), "SE": Decimal("18"),
-    "TO": Decimal("17"), "RO": Decimal("19"),
-}
-
-# Regiões com alíquota interestadual de 12% (com crédito)
-_SOUTHEAST = frozenset({"SP", "RJ", "ES", "MG"})
-_SOUTH = frozenset({"PR", "SC", "RS"})
+_INTERNAL_RATES = INTERNAL_RATES
 
 # --------------------------------------------------------------------------- #
 # Natureza da operação / destinatário (palavras normalizadas)
@@ -195,8 +184,20 @@ _LICENSE_GOODS_WORDS = (
     "licenca de software", "licenca de uso", "licenca permanente",
     "licenca definitiva", "venda de licenca", "transferencia de licenca",
 )
-_COMPANY_WORDS = ("empresa", "contribuinte", "sociedade", "ltda",
-                  "estabelecimento", "fornecedor", "cliente")
+# Destinatário: só o que o cliente afirma sobre o DESTINATÁRIO decide.
+# "empresa"/"cliente"/"contribuinte" sozinhos NÃO decidem: tanto quem revende
+# quanto quem usa/consume são contribuintes — o DIFAL muda de regra entre eles.
+_CONSUMER_FINAL_WORDS = (
+    "pessoa fisica", "pf", "consumidor final", "nao contribuinte",
+)
+_USO_CONSUMO_WORDS = (
+    "uso e consumo", "uso proprio", "consumir", "consumo proprio",
+    "ativo imobilizado", "imobilizado", "usar na empresa", "usar e consumir",
+    "vou usar", "vai usar",
+)
+_RESALE_WORDS = (
+    "revenda", "revender", "vou revender", "vai revender",
+)
 
 
 @dataclass
@@ -207,7 +208,8 @@ class DifalCase:
     origin_label: str           # ex.: "Belo Horizonte/MG" ou "Minas Gerais"
     destination_label: str
     kind: str                   # servico | mercadoria | ambiguo | desconhecido
-    recipient: str              # empresa | pf | desconhecido
+    recipient: str              # revenda | uso_consumo | consumidor_final | desconhecido
+    interna_informada: Decimal | None = None   # alíquota interna dita pelo cliente
 
 
 def _find_mentions(t: str) -> list[tuple[int, int, str, str]]:
@@ -231,6 +233,11 @@ def _find_mentions(t: str) -> list[tuple[int, int, str, str]]:
     # "para" — que por isso não está em UF_NAMES. A preposição nunca vem logo
     # depois de de/do/da ("vender para X", "para ele"), então o contexto resolve.
     for m in re.finditer(r"\b(de|do|da|dos|das)\s+para\b", t):
+        s = m.end() - 4
+        found.append((s, s + 4, "PA", UF_DISPLAY["PA"]))
+    # "no Pará", "em Pará": o contexto de lugar deixa claro que é a UF
+    # (a preposição "para" nunca vem logo depois de "no"/"em")
+    for m in re.finditer(r"\b(no|na|em|numa|num)\s+para\b", t):
         s = m.end() - 4
         found.append((s, s + 4, "PA", UF_DISPLAY["PA"]))
 
@@ -304,33 +311,158 @@ def _classify_kind(t: str) -> str:
 
 
 def _classify_recipient(t: str) -> str:
-    if re.search(r"\bpessoa fisica\b", t) or re.search(r"\bpf\b", t) \
-            or "consumidor" in t or "nao contribuinte" in t:
-        return "pf"
-    if any(w in t for w in _COMPANY_WORDS):
-        return "empresa"
+    """Destinatário da operação: só o que o cliente AFIRMA decide.
+
+    * revenda         — vai REVENDER a mercadoria (contribuinte, sem DIFAL);
+    * uso_consumo     — vai USAR/CONSUMIR ou imobilizar o bem (contribuinte,
+                        com DIFAL recolhido pelo destinatário);
+    * consumidor_final— pessoa física / não contribuinte (com DIFAL recolhido
+                        pelo remetente);
+    * desconhecido    — o resto ("cliente de MG", "uma empresa",
+                        "contribuinte" sozinho): o bot PERGUNTA os 3 casos.
+    """
+    if any(w in t for w in _CONSUMER_FINAL_WORDS):
+        return "consumidor_final"
+    if any(w in t for w in _USO_CONSUMO_WORDS):
+        return "uso_consumo"
+    if any(w in t for w in _RESALE_WORDS):
+        return "revenda"
     return "desconhecido"
+
+
+# --------------------------------------------------------------------------- #
+# Utilidades do cálculo (alíquota interna informada, valor da nota)
+# --------------------------------------------------------------------------- #
+def _soft_norm(s: str) -> str:
+    """Minúsculas e sem acentos, mas MANTENDO pontuação, símbolos e %.
+
+    ``normalize_name`` apaga "%", "R$", "." e "," — inútil para extrair a
+    alíquota ("19%") e o valor da nota ("R$ 10.000,00").
+    """
+    return strip_accents(s or "").lower()
+
+
+def _extract_internal_rate(t: str) -> Decimal | None:
+    """Alíquota interna dita pelo cliente ("a interna é 19%", "19%").
+
+    Exige o sinal de % — um "3" solto (resposta da lista de casos) NÃO é
+    alíquota. Recebe texto com acentuação preservada (``_soft_norm``).
+    """
+    t = _soft_norm(t)
+    m = re.search(r"interna\s*(?:de|e|:|=)?\s*(\d{1,2}(?:,\d+)?)\s*%", t)
+    if m:
+        return Decimal(m.group(1).replace(",", "."))
+    # mensagem curta só com o número ("19%")
+    m = re.fullmatch(r"(?:a\s+)?(\d{1,2}(?:,\d+)?)\s*%\s*", t.strip())
+    if m:
+        return Decimal(m.group(1).replace(",", "."))
+    return None
+
+
+def _extract_nota_value(t: str) -> Decimal | None:
+    """Valor da nota dito pelo cliente ("R$ 10.000,00", "valor de 10000")."""
+    t = _soft_norm(t)
+    m = re.search(r"r\$\s*([\d.]+(?:,\d{1,2})?)", t)
+    if not m:
+        m = re.search(r"valor(?:\s+da\s+nota)?\s*(?:de|e|:)\s*([\d.]+(?:,\d{1,2})?)",
+                      t)
+    if not m:
+        return None
+    raw = m.group(1).replace(".", "").replace(",", ".")
+    try:
+        return Decimal(raw)
+    except Exception:  # noqa: BLE001 - valor malformado: ignora
+        return None
+
+
+def _interna_do_destino(c: DifalCase) -> Decimal | None:
+    """Alíquota interna do destino: a tabela do código ou a dita pelo cliente.
+
+    Se não houver nenhuma das duas, NÃO se inventa número — o bot pede.
+    """
+    if c.interna_informada is not None:
+        return c.interna_informada
+    return _INTERNAL_RATES.get(c.destination)
+
+
+def precisa_interna(c: DifalCase) -> bool:
+    """True quando o caso ainda depende da alíquota interna do destino."""
+    if not (c.origin and c.destination) or c.origin == c.destination:
+        return False
+    return _interna_do_destino(c) is None
+
+
+def precisa_destinatario(c: DifalCase) -> bool:
+    """True quando o caso ainda depende de saber o que vale para o destinatário."""
+    return bool(
+        c.kind == "mercadoria" and c.origin and c.destination
+        and c.origin != c.destination and c.recipient == "desconhecido"
+    )
+
+
+def _brl(v: Decimal) -> str:
+    """Valor em reais no formato brasileiro (1.234,56)."""
+    s = f"{v:,.2f}"
+    return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def _difal_reais_lines(difal: Decimal, text: str) -> list[str]:
+    """Valor em reais do DIFAL — SÓ quando o cliente informou o valor da nota."""
+    valor = _extract_nota_value(text)
+    if valor is None:
+        return []
+    em_reais = (valor * difal / Decimal("100")).quantize(Decimal("0.01"))
+    return [
+        "",
+        f"* valor informado: R$ {_brl(valor)} → DIFAL estimado: "
+        f"R$ {_brl(em_reais)} ({difal}% sobre o valor).",
+        "Obs.: o cálculo pode usar base \"por dentro\" e o estado pode cobrar "
+        "adicional de FCP (fundo de combate à pobreza) — confirme o valor com "
+        "seu contador.",
+    ]
+
 
 # --------------------------------------------------------------------------- #
 # Resposta do caso
 # --------------------------------------------------------------------------- #
-def _interstate_rate(origin: str, destination: str, credit: bool = True) -> Decimal:
-    """Alíquota interestadual padrão (EC 87/2015): 12% na mesma região
-    (Sudeste/Sul); nas demais, 4% (com crédito) ou 7% (sem crédito — destino
-    não contribuinte / MOC)."""
-    if (origin in _SOUTHEAST and destination in _SOUTHEAST) \
-            or (origin in _SOUTH and destination in _SOUTH):
-        return Decimal("12")
-    return Decimal("4") if credit else Decimal("7")
+_CONTADOR_CLOSING = (
+    "Confirme a alíquota interna e as regras do estado de destino com seu contador."
+)
+
+
+def _ask_recipient(c: DifalCase) -> str:
+    """Pergunta OBRIGATÓRIA antes de responder 'sim/não' sobre DIFAL."""
+    route = f"{c.origin_label} → {c.destination_label}" \
+        if c.origin and c.destination else "a operação"
+    return (
+        f"Antes de dizer se há DIFAL em {route}, me confirma qual destes casos "
+        "vale para o destinatário?\n"
+        "1) Vai REVENDER a mercadoria (destinatário contribuinte de ICMS)\n"
+        "2) Vai USAR ou CONSUMIR na própria empresa, ou lançar no ATIVO "
+        "IMOBILIZADO (destinatário contribuinte de ICMS)\n"
+        "3) É PESSOA FÍSICA ou NÃO CONTRIBUINTE (consumidor final)\n\n"
+        "Responde só o número (1, 2 ou 3) que eu calculo na hora."
+    )
+
+
+def _ask_interna(c: DifalCase) -> str:
+    """Sem alíquota interna cadastrada: pede o número em vez de inventar."""
+    return "\n".join([
+        f"Me informa a alíquota interna de {UF_DISPLAY.get(c.destination, c.destination)}? "
+        "Ex.: \"a interna é 19%\".",
+        "Sem esse número eu não calculo o DIFAL — não vou inventar alíquota.",
+        "",
+        _CONTADOR_CLOSING,
+    ])
 
 
 def _answer_service(c: DifalCase) -> str:
     lines = [
-        "**Não — nesse caso não há DIFAL.**",
+        "Não — nesse caso não há DIFAL.",
         "",
-        "O que você descreve é um **serviço** (lista da LC 116/2003), e serviço "
+        "O que você descreve é um serviço (lista da LC 116/2003), e serviço "
         "não incide ICMS — o DIFAL só existe dentro do ICMS. O imposto do "
-        "serviço é o **ISS**, municipal, cobrado no município do tomador.",
+        "serviço é o ISS, municipal, cobrado no município do tomador.",
     ]
     if c.destination:
         lines.append(
@@ -348,54 +480,96 @@ def _answer_service(c: DifalCase) -> str:
     return "\n".join(lines)
 
 
-def _answer_goods(c: DifalCase) -> str:
+def _answer_resale(c: DifalCase, inter: Decimal) -> str:
+    """Caso 1 — destinatário vai REVENDER (contribuinte): não há DIFAL."""
+    return "\n".join([
+        "Não — nesse caso (revenda) não há DIFAL (0%).",
+        "",
+        f"Operação interestadual {c.origin_label} → {c.destination_label}:",
+        f"* alíquota interestadual: {int(inter)}% (cobrada pela origem);",
+        "* o ICMS interestadual destacado pela origem é aproveitado pelo "
+        "destinatário (contribuinte de ICMS) como CRÉDITO — não há DIFAL a "
+        "recolher.",
+        "",
+        _CONTADOR_CLOSING,
+    ])
+
+
+def _answer_uso_consumo(c: DifalCase, inter: Decimal, interna: Decimal,
+                        difal: Decimal, text: str) -> str:
+    """Caso 2 — uso/consumo ou ativo imobilizado de contribuinte: há DIFAL."""
+    lines = [
+        f"Sim — há DIFAL de {difal} pontos percentuais.",
+        "",
+        f"Operação interestadual {c.origin_label} → {c.destination_label} "
+        "(uso/consumo ou ativo imobilizado de contribuinte):",
+        f"* alíquota interestadual: {int(inter)}% (cobrada pela origem);",
+        f"* alíquota interna do destino: {int(interna)}%;",
+        f"* DIFAL = a diferença: {difal} pontos percentuais.",
+        "* Em regra, o DIFAL é recolhido pelo DESTINATÁRIO (contribuinte) ao "
+        "estado de destino — confirme na legislação do estado.",
+    ]
+    lines += _difal_reais_lines(difal, text)
+    lines += ["", _CONTADOR_CLOSING]
+    return "\n".join(lines)
+
+
+def _answer_consumidor_final(c: DifalCase, inter: Decimal, interna: Decimal,
+                             difal: Decimal, text: str) -> str:
+    """Caso 3 — pessoa física / não contribuinte: há DIFAL (remetente recolhe)."""
+    lines = [
+        f"Sim — há DIFAL de {difal} pontos percentuais.",
+        "",
+        f"Operação interestadual {c.origin_label} → {c.destination_label} "
+        "(venda a pessoa física / não contribuinte — consumidor final):",
+        f"* alíquota interestadual: {int(inter)}% (cobrada pela origem);",
+        f"* alíquota interna do destino: {int(interna)}%;",
+        f"* DIFAL = a diferença: {difal} pontos percentuais.",
+        "* O REMETENTE (a empresa que vende) recolhe o DIFAL para o estado de "
+        "destino.",
+    ]
+    lines += _difal_reais_lines(difal, text)
+    lines += ["", _CONTADOR_CLOSING]
+    return "\n".join(lines)
+
+
+def _answer_goods(c: DifalCase, text: str = "") -> str:
     if c.origin and c.destination:
         if c.origin == c.destination:
             rate = _INTERNAL_RATES.get(c.origin)
             rate_txt = f" ({int(rate)}% em {UF_DISPLAY[c.origin]})" \
                 if rate is not None else ""
             return (
-                "**Não — não há DIFAL.**\n\n"
-                f"Operação **interna** (origem e destino em {c.origin_label}): incide "
+                "Não — não há DIFAL.\n\n"
+                f"Operação interna (origem e destino em {c.origin_label}): incide "
                 f"o ICMS pela alíquota interna do estado{rate_txt}. DIFAL só existe "
-                f"em operação interestadual (destinatário em outro estado)."
+                f"em operação interestadual (destinatário em outro estado).\n\n"
+                f"{_CONTADOR_CLOSING}"
             )
-        inter = _interstate_rate(c.origin, c.destination, credit=c.recipient != "pf")
-        interna = _INTERNAL_RATES.get(c.destination)
+        inter = aliquota_interestadual(c.origin, c.destination)
+        if c.recipient == "desconhecido":
+            return _ask_recipient(c)
+        interna = _interna_do_destino(c)
         if interna is None:
-            return (
-                "**Sim — há DIFAL nessa operação interestadual.**\n\n"
-                f"Operação {c.origin_label} → {c.destination_label}: a origem cobra a "
-                f"alíquota interestadual ({int(inter)}%) e o estado de destino cobra a "
-                f"diferença até a alíquota interna dele (o DIFAL). A alíquota interna "
-                f"de {UF_DISPLAY[c.destination]} não está na minha tabela de referência "
-                f"— confirme na SEFAZ do destino."
-            )
+            return _ask_interna(c)
         difal = interna - inter
-        lines = [
-            f"**Sim — há DIFAL de {int(difal)}%.**",
-            "",
-            f"Operação interestadual {c.origin_label} → {c.destination_label}:",
-            f"* alíquota interestadual: {int(inter)}% (cobrada pela origem);",
-            f"* alíquota interna do destino: {int(interna)}%;",
-            f"* DIFAL = a diferença: **{int(difal)}%** (cobrado pelo estado de destino).",
-        ]
-        if c.recipient == "pf":
-            lines += [
-                "",
-                "⚠️ Destinatário pessoa física / não contribuinte: é o caso de **MOC** "
-                "(mercadoria para consumo e uso) — o DIFAL é cobrado por antecipação "
-                "pelo estado de destino, já embutido no preço da nota.",
-            ]
-        return "\n".join(lines)
+        if c.recipient == "revenda":
+            return _answer_resale(c, inter)
+        if c.recipient == "uso_consumo":
+            return _answer_uso_consumo(c, inter, interna, difal, text)
+        return _answer_consumidor_final(c, inter, interna, difal, text)
     known = c.origin_label if c.origin else c.destination_label
     return (
-        "Para te responder com o número exato, preciso dos **dois** estados "
+        "Para te responder com o número exato, preciso dos dois estados "
         f"(origem e destino) — você citou apenas {known}.\n\n"
-        "A regra: DIFAL só existe em operação **interestadual** de mercadoria — "
-        "é a diferença entre a alíquota interna do estado de destino e a "
-        "interestadual (4%, 7% ou 12%). Operação interna (mesmo estado) não "
-        "gera DIFAL."
+        "A regra: em operação interestadual de mercadoria o DIFAL é a diferença "
+        "entre a alíquota interna do destino e a interestadual (4% para bens "
+        "importados; 7% da origem no Sul/Sudeste com destino no Norte, "
+        "Nordeste, Centro-Oeste ou ES; 12% nos demais casos) — e ele só é "
+        "devido em caso de USO/CONSUMO (ou ativo imobilizado) de contribuinte "
+        "e de VENDA A PESSOA FÍSICA/NÃO CONTRIBUINTE; na REVENDA não há DIFAL. "
+        "Operação interna (mesmo estado) não gera DIFAL.\n\n"
+        f"{_CONTADOR_CLOSING}"
     )
 
 
@@ -406,66 +580,74 @@ def _answer_unknown(c: DifalCase) -> str:
     route = f" ({c.origin_label} → {c.destination_label})" \
         if c.origin and c.destination else ""
     lines = [
-        "**Depende da natureza da operação** — você não especificou se é "
+        "Depende da natureza da operação — você não especificou se é "
         "serviço ou mercadoria, e DIFAL só existe dentro do ICMS "
         "(mercadoria).",
         "",
     ]
     if c.destination:
         lines.append(
-            f"* se for **serviço** (NFS-e, LC 116/2003){route}: **não há "
-            f"DIFAL** — o imposto é o ISS, pago/retido em {c.destination_label} "
+            f"* se for serviço (NFS-e, LC 116/2003){route}: não há "
+            f"DIFAL — o imposto é o ISS, pago/retido em {c.destination_label} "
             "(alíquota de 2% a 5%, definida pelo município);"
         )
     else:
         lines.append(
-            "* se for **serviço** (NFS-e, LC 116/2003): **não há DIFAL** — o "
+            "* se for serviço (NFS-e, LC 116/2003): não há DIFAL — o "
             "imposto é o ISS, pago no município do tomador;"
         )
     if c.origin and c.destination:
         if c.origin == c.destination:
             lines.append(
-                f"* se for **mercadoria** (NFe){route}: **não há DIFAL** — "
+                f"* se for mercadoria (NFe){route}: não há DIFAL — "
                 "operação interna (mesmo estado), ICMS pela alíquota interna."
             )
         else:
-            inter = _interstate_rate(c.origin, c.destination,
-                                     credit=c.recipient != "pf")
-            interna = _INTERNAL_RATES.get(c.destination)
+            inter = aliquota_interestadual(c.origin, c.destination)
+            interna = _interna_do_destino(c)
             if interna is not None:
                 difal = interna - inter
                 lines.append(
-                    f"* se for **mercadoria** (NFe){route}: **há DIFAL de "
-                    f"{int(difal)}%** — a origem cobra a interestadual "
-                    f"({int(inter)}%) e o destino cobra a diferença até a "
-                    f"alíquota interna dele ({int(interna)}%)."
+                    f"* se for mercadoria (NFe){route}: a alíquota interestadual "
+                    f"é {int(inter)}% e a interna do destino {int(interna)}% — "
+                    "qual destes casos vale para o destinatário?"
                 )
-                if c.recipient == "pf":
-                    lines.append(
-                        "  - Destinatário pessoa física / não contribuinte: "
-                        "é o caso de **MOC** — o DIFAL é cobrado por "
-                        "antecipação pelo estado de destino."
-                    )
+                lines.append(
+                    "  1) revenda (contribuinte): não há DIFAL (0%);"
+                )
+                lines.append(
+                    f"  2) uso/consumo ou ativo imobilizado (contribuinte): "
+                    f"DIFAL de {difal} pontos percentuais, recolhido pelo "
+                    "destinatário;"
+                )
+                lines.append(
+                    f"  3) pessoa física / não contribuinte: DIFAL de "
+                    f"{difal} pontos percentuais, recolhido pelo remetente."
+                )
             else:
                 lines.append(
-                    f"* se for **mercadoria** (NFe){route}: há DIFAL — "
-                    f"diferença entre a alíquota interna do destino e a "
-                    f"interestadual ({int(inter)}%); a interna de "
-                    f"{UF_DISPLAY[c.destination]} não está na minha tabela "
-                    "de referência — confirme na SEFAZ do destino."
+                    f"* se for mercadoria (NFe){route}: a alíquota interestadual "
+                    f"é {int(inter)}%; me informa a alíquota interna de "
+                    f"{UF_DISPLAY[c.destination]} (ex.: \"a interna é 19%\") "
+                    "que eu calculo o DIFAL (não invento alíquota)."
                 )
     else:
         lines.append(
-            "* se for **mercadoria** (NFe): há DIFAL quando a operação é "
-            "interestadual — diferença entre a alíquota interna do destino "
-            "e a interestadual (4%, 7% ou 12%); operação interna não gera "
-            "DIFAL."
+            "* se for mercadoria (NFe): em operação interestadual o DIFAL é a "
+            "diferença entre a alíquota interna do destino e a interestadual "
+            "(4% para importados; 7% da origem no Sul/Sudeste com destino no "
+            "Norte, Nordeste, Centro-Oeste ou ES; 12% nos demais casos) — há "
+            "DIFAL no uso/consumo (ou ativo imobilizado) de contribuinte e na "
+            "venda a pessoa física/não contribuinte; na revenda não há; "
+            "operação interna também não gera DIFAL."
         )
     lines += [
         "",
-        "Me confirma qual é a operação (ou me manda a nota) que eu te dou o "
-        "detalhamento completo.",
+        "Me confirma se é serviço ou mercadoria e, se for mercadoria, "
+        "qual destes casos vale para o destinatário: 1) revenda, 2) "
+        "uso/consumo ou ativo imobilizado, 3) pessoa física/não contribuinte?",
     ]
+    lines += ["", _CONTADOR_CLOSING]
     return "\n".join(lines)
 
 
@@ -474,12 +656,15 @@ def _answer_ambiguous(c: DifalCase) -> str:
     if c.origin and c.destination:
         route = f" ({c.origin_label} → {c.destination_label})"
     return (
-        "**Depende da natureza da operação** — você citou serviço e mercadoria junto.\n\n"
-        f"* se for **serviço** (LC 116/2003){route}: **não há DIFAL** — incide ISS no "
+        "Depende da natureza da operação — você citou serviço e mercadoria junto.\n\n"
+        f"* se for serviço (LC 116/2003){route}: não há DIFAL — incide ISS no "
         "município do tomador;\n"
-        f"* se for **mercadoria**{route}: há DIFAL quando a operação é interestadual "
-        "(diferença entre a alíquota interestadual e a interna do destino).\n\n"
+        f"* se for mercadoria{route}: em operação interestadual há DIFAL no "
+        "uso/consumo (ou ativo imobilizado) de contribuinte e na venda a pessoa "
+        "física/não contribuinte (diferença entre a alíquota interna do destino "
+        "e a interestadual); na revenda não há DIFAL.\n\n"
         "Me confirma qual é a operação (ou me manda a nota) que eu te dou o número exato."
+        "\n\n" + _CONTADOR_CLOSING
     )
 
 
@@ -506,15 +691,21 @@ def analyze_difal_case(text: str) -> DifalCase | None:
         destination_label=d_label,
         kind=_classify_kind(t),
         recipient=_classify_recipient(t),
+        interna_informada=_extract_internal_rate(text),
     )
 
 
-def answer_difal_case(case: DifalCase) -> str:
-    """Resposta direta ao caso de DIFAL do cliente (determinística)."""
+def answer_difal_case(case: DifalCase, text: str = "") -> str:
+    """Resposta direta ao caso de DIFAL do cliente (determinística).
+
+    ``text`` é a pergunta completa do cliente (usada, entre outras coisas,
+    para saber se ele informou o VALOR da nota — aí o DIFAL sai também em
+    reais, com o alerta de base "por dentro"/FCP).
+    """
     if case.kind == "servico":
         return _answer_service(case)
     if case.kind == "mercadoria":
-        return _answer_goods(case)
+        return _answer_goods(case, text=text)
     if case.kind == "ambiguo":
         return _answer_ambiguous(case)
     # "desconhecido" (sem palavra de natureza): o cliente não especificou a
@@ -522,4 +713,7 @@ def answer_difal_case(case: DifalCase) -> str:
     return _answer_unknown(case)
 
 
-__all__ = ["DifalCase", "analyze_difal_case", "answer_difal_case"]
+__all__ = [
+    "DifalCase", "analyze_difal_case", "answer_difal_case",
+    "precisa_destinatario", "precisa_interna",
+]

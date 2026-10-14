@@ -29,7 +29,11 @@ from pathlib import Path
 
 import httpx
 
-from ..domain.difal_case import analyze_difal_case
+from ..domain.difal_case import (
+    analyze_difal_case,
+    precisa_destinatario,
+    precisa_interna,
+)
 from ..domain.models import Invoice, Transaction
 from ..domain.rules import DeterministicMatcher, normalize_name
 from ..domain.tax import InvoiceAudit, _brl, format_tax_lines
@@ -101,6 +105,10 @@ class TelegramAPI:
         }) or []
 
     def send_text(self, chat_id, text: str, parse_mode: str | None = None):
+        # sem parse_mode o Telegram mostra o texto CRU: "**negrito**" aparece
+        # com asteriscos soltos — remove o marcador antes de enviar
+        if not parse_mode:
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
         body: dict = {"chat_id": chat_id, "text": text[:4096]}
         if parse_mode:
             body["parse_mode"] = parse_mode
@@ -1154,7 +1162,18 @@ class ConciliationAgent:
         "servico", "servicos", "mercadoria", "mercadorias", "produto",
         "produtos", "venda", "vender", "compra", "comprar", "software",
         "licenca", "origem", "destino",
+        # destinatário (a pergunta dos 3 casos: revenda x uso/consumo x PF)
+        "revenda", "revender", "usar", "consumir", "consumo", "imobilizado",
+        "fisica", "consumidor", "contribuinte", "nao contribuinte",
     )
+
+    # resposta numérica à lista de casos ("1", "2", "3") -> frase que o
+    # classificador de destinatário entende
+    _DIFAL_CASE_NUM = {
+        "1": "é para revenda",
+        "2": "vai usar e consumir na própria empresa ou ativo imobilizado",
+        "3": "é pessoa fisica nao contribuinte",
+    }
 
     def _difal_followup(self, t: str) -> tuple[bool, object]:
         """Se o texto completa um caso de DIFAL pendente.
@@ -1167,11 +1186,15 @@ class ConciliationAgent:
             return True, follow_case
         if any(w in t for w in self._DIFAL_NATURE_WORDS):
             return True, None
+        # alíquota interna informada ("a interna é 19%", "19%")
+        if re.search(r"interna|\d{1,2}\s*%", t):
+            return True, None
         return False, None
 
     def _pending_difal(self, text: str) -> str | None:
-        """Pergunta de caso de DIFAL incompleta (faltou um estado ou a
-        natureza da operação) -> guardar p/ juntar com a resposta do cliente
+        """Pergunta de caso de DIFAL incompleta (faltou um estado, a
+        natureza da operação, o caso do destinatário ou a alíquota interna
+        do destino) -> guardar p/ juntar com a resposta do cliente
         na próxima mensagem."""
         if "difal" not in normalize_name(text):
             return None
@@ -1181,6 +1204,10 @@ class ConciliationAgent:
         if case.kind in ("desconhecido", "ambiguo"):
             return text
         if case.kind == "mercadoria" and (case.origin is None) != (case.destination is None):
+            return text
+        # mercadoria interestadual: ainda depende de saber o caso do
+        # destinatário (revenda x uso/consumo x PF) ou a alíquota interna
+        if precisa_destinatario(case) or precisa_interna(case):
             return text
         return None
 
@@ -1272,11 +1299,18 @@ class ConciliationAgent:
                 "extrato e as faturas ou pergunte sobre qualquer imposto."
             ])
 
-        # continuação de caso de DIFAL: o bot pediu os dois estados (ou a
-        # natureza da operação) e o cliente responde sem repetir a pergunta
-        # -> junta a pergunta original com a resposta e reanalisa o caso
+        # continuação de caso de DIFAL: o bot pediu os dois estados, a
+        # natureza da operação, o caso do destinatário (1/2/3) ou a alíquota
+        # interna — o cliente responde sem repetir a pergunta -> junta a
+        # pergunta original com a resposta e reanalisa o caso
         if session.pending_difal_text:
-            t = normalize_name(text)
+            t = normalize_name(text).strip()
+            m = re.fullmatch(r"([123])\s*[).,–-]*", t)
+            if m:
+                # resposta numérica à lista de casos -> frase equivalente
+                text = self._DIFAL_CASE_NUM[m.group(1)]
+                t = normalize_name(text)
+                print(f"[bot] DIFAL: resposta numérica {m.group(1)} -> {text!r}")
             is_follow, follow_case = self._difal_followup(t)
             if "difal" not in t and is_follow:
                 if follow_case is not None and follow_case.origin \
@@ -1306,7 +1340,8 @@ class ConciliationAgent:
                 session.last_discussed = target
             session.pending_difal_text = self._pending_difal(text)
             if session.pending_difal_text:
-                print("[bot] DIFAL: caso incompleto — aguardando origem/destino ou natureza")
+                print("[bot] DIFAL: caso incompleto — aguardando estados, "
+                      "caso do destinatário ou alíquota interna")
             session.history.append({"role": "user", "content": text})
             session.history.append({"role": "assistant", "content": answer[:200]})
             session.history = session.history[-self.history_turns * 2:]

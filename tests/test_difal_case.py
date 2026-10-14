@@ -64,8 +64,8 @@ def test_caso_hipotetico_nota_generica_minas_roraima():
     assert "Roraima" in ans
     assert "serviço" in ans.lower()
     assert "mercadoria" in ans.lower()
-    # mercadoria MG -> RR: interestadual 4%, interna RR 19% -> DIFAL 15%
-    assert "15%" in ans
+    # mercadoria MG -> RR: interestadual 7%, interna RR 19% -> DIFAL 12 pp
+    assert "12 pontos percentuais" in ans
 
 
 def test_caso_hipotetico_nota_generica_com_notas_na_conversa():
@@ -75,7 +75,7 @@ def test_caso_hipotetico_nota_generica_com_notas_na_conversa():
         "estou abrindo uma empresa de Minas para atender um cliente de "
         "Roraima, vou pagar DIFAL se emitir nota contra ele?", [_nfe_difal()])
     assert "NFe 1234" not in ans
-    assert "15%" in ans
+    assert "12 pontos percentuais" in ans
 
 
 def test_referencia_na_nota_mantem_interpretacao_de_nota():
@@ -103,20 +103,21 @@ def test_caso_servico_com_notas_na_conversa():
 def test_mercadoria_mesma_regiao():
     adv = TaxAdvisor()
     ans = adv.answer("se eu comprar de SP pra MG, tem DIFAL?", [])
-    # SP -> MG: mesma região (Sudeste) -> interestadual 12%, interna MG 18%
-    assert "Sim" in ans
-    assert "6%" in ans
-    assert "12%" in ans
-    assert "18%" in ans
+    # SP -> MG: interestadual 12% (mesma região Sul/Sudeste) — mas o bot NÃO
+    # responde "sim" direto: pergunta se é revenda ou consumidor final
+    assert "Sim" not in ans
+    assert "consumidor final" in ans.lower()
+    assert "revender" in ans.lower()
 
 
 def test_mercadoria_diferente_regiao():
     adv = TaxAdvisor()
-    ans = adv.answer("venda de mercadoria de SP para RS, qual o DIFAL?", [])
-    # SP -> RS: interestadual 4%, interna RS 17%
-    assert "Sim" in ans
-    assert "13%" in ans
-    assert "4%" in ans
+    ans = adv.answer(
+        "venda de mercadoria de SP para RS a um consumidor final, qual o DIFAL?",
+        [])
+    # SP -> RS: interestadual 12% (entre Sul/Sudeste), interna RS 17% -> 5 pp
+    assert "5 pontos percentuais" in ans
+    assert "12%" in ans
     assert "17%" in ans
 
 
@@ -127,24 +128,43 @@ def test_mercadoria_interna():
     assert "interna" in ans
 
 
-def test_moc_pessoa_fisica():
+def test_consumidor_final_pessoa_fisica():
     adv = TaxAdvisor()
     ans = adv.answer(
         "vou comprar um equipamento de SP para uma pessoa física em MG, "
         "tem DIFAL?", [])
     assert "Sim" in ans
-    assert "6%" in ans
-    assert "MOC" in ans
+    assert "6 pontos percentuais" in ans
+    assert "consumidor final" in ans.lower()
+    assert "MOC" not in ans
+
+
+def test_revenda_sem_difal():
+    adv = TaxAdvisor()
+    ans = adv.answer(
+        "vou comprar um equipamento de SP para revender a uma empresa de MG, "
+        "tem DIFAL?", [])
+    assert "Não" in ans
+    assert "revenda" in ans.lower()
+    assert "MOC" not in ans
 
 
 def test_venda_licenca_software_e_icms():
-    # venda de licença (transferência de propriedade) = ICMS, não ISS
+    # venda de licença (transferência de propriedade) = ICMS, não ISS; sem
+    # saber se o destinatário revende ou consome, o bot pergunta antes
     adv = TaxAdvisor()
     ans = adv.answer(
         "vou vender licença de software de MG para uma empresa em SP, "
         "tem DIFAL?", [])
-    assert "Sim" in ans
-    assert "6%" in ans
+    assert "Sim" not in ans
+    assert "consumidor final" in ans.lower()
+    # respondendo "é para revenda" (junção que o bot faz na conversa):
+    # MG -> SP = 12% de interestadual, sem DIFAL
+    ans2 = adv.answer(
+        "vou vender licença de software de MG para uma empresa em SP, "
+        "tem DIFAL? é para revenda", [])
+    assert "Não" in ans2
+    assert "revenda" in ans2.lower()
 
 
 def test_caso_sem_estado_fica_incompleto():

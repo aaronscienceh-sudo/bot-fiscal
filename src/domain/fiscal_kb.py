@@ -162,13 +162,16 @@ RULES: list[FiscalRule] = [
     FiscalRule(
         title="ICMS",
         keywords=("icms", "imposto de circulacao de mercadorias"),
-        digest="ICMS: estadual, incide sobre mercadorias e transportes; SP interno 18%; interestadual 4%/7%/12%; destacado, não soma no total.",
+        digest="ICMS: estadual, incide sobre mercadorias e transportes; SP interno 18%; interestadual 4% (importados), 7% (origem Sul/Sudeste exceto ES -> Norte, Nordeste, Centro-Oeste ou ES), 12% (demais casos); destacado, não soma no total.",
         text=(
             "🚚 ICMS — o imposto estadual\n"
             "• Incide sobre CIRCULAÇÃO DE MERCADORIAS e transportes/comunicação interestadual — "
             "não sobre serviços da lista LC 116 (esses pagam ISS).\n"
             "• Alíquota interna (SP): 18%.\n"
-            "• Interestadual: 4% (com crédito), 7% (sem crédito) ou 12% (mesma região, com crédito).\n"
+            "• Interestadual (Res. SF 22/1989 e 13/2012): 4% para bens importados; "
+            "7% quando a origem é do Sul/Sudeste (PR, SC, RS, SP, RJ, MG) e o "
+            "destino é Norte, Nordeste, Centro-Oeste ou ES; 12% nos demais casos "
+            "(inclui operações entre estados do Sul/Sudeste).\n"
             "• Na NFe, o ICMS é DESTACADO (não soma no total): "
             "vNF = produtos + frete/seguro/outras + IPI − descontos."
         ),
@@ -207,8 +210,9 @@ RULES: list[FiscalRule] = [
             "• Também incide sobre TRANSPORTES e COMUNICAÇÃO interestadual/internacional "
             "(carga, telecomunicações).\n"
             "• Alíquotas:\n"
-            "  - Padrão (SP): 18% interno; interestadual 4% (com crédito), 7% (sem "
-            "crédito) ou 12% (mesma região, com crédito).\n"
+            "  - Padrão (SP): 18% interno; interestadual 4% (bens importados), 7% "
+            "(origem no Sul/Sudeste exceto ES com destino no Norte, Nordeste, "
+            "Centro-Oeste ou ES) e 12% nos demais casos.\n"
             "  - Reduzidas (convênios/leis estaduais): alimentos (12-13%), livros e papel "
             "(em regra 12-13%), bens de informática (12-13%), energia elétrica, entre "
             "outros.\n"
@@ -258,7 +262,7 @@ RULES: list[FiscalRule] = [
                   "substituido tributario", "quem e o substituido",
                   "preciso pagar icms st", "tenho que pagar icms st",
                   "pago icms st", "pagar icms st", "st no faturamento"),
-        digest="ICMS-ST: ICMS de toda a cadeia cobrado por antecipação por um substituto (produtor/importador/designado); calculado com MVA (margem de valor adicionado) sobre a base; comprador não paga ICMS na entrada/saída; cST 40/41/50/60; soma no total da NFe; contribuinte tem crédito, Simples não; MOC = vendedor cobra do não contribuinte; ST interestadual com partilha (Conv. ICMS 68/19).",
+        digest="ICMS-ST: ICMS de toda a cadeia cobrado por antecipação por um substituto (produtor/importador/designado); calculado com MVA (margem de valor adicionado) sobre a base; comprador não paga ICMS na entrada/saída; cST 40/41/50/60; soma no total da NFe; contribuinte tem crédito, Simples não; venda a consumidor final não contribuinte: vendedor cobra o DIFAL por antecipação; ST interestadual com partilha (Conv. ICMS 68/19).",
         text=(
             "🔄 ICMS-ST (substituição tributária)\n"
             "• O que é: o estado ANTECIPA a cobrança do ICMS de TODA a cadeia de "
@@ -286,10 +290,10 @@ RULES: list[FiscalRule] = [
             "com o ICMS que vai pagar.\n"
             "  - No Simples Nacional não há crédito: o ST pago fica como custo (pergunte "
             "'ICMS-ST no Simples' que eu detalho).\n"
-            "• MOC (Mecanismo de Obrigatoriedade de Cobrança): quando o DESTINATÁRIO é "
-            "NÃO CONTRIBUINTE (ex.: pessoa física), o VENDEDOR fica obrigado a cobrar o "
-            "ICMS/DIFAL por antecipação — aparece como 'DIFAL MOC' na NFe. É a mesma "
-            "lógica de antecipação, aplicada ao DIFAL.\n"
+            "• Em VENDA A CONSUMIDOR FINAL NÃO CONTRIBUINTE (ex.: pessoa física): o "
+            "vendedor é obrigado a cobrar o DIFAL por antecipação pelo estado de "
+            "destino — na NFe aparece como 'ICMS DIFAL'. É a mesma lógica de "
+            "antecipação, aplicada ao DIFAL.\n"
             "• ST interestadual: o ST pode ser partilhado entre origem e destino "
             "(Convênio ICMS 68/19 e afins) — a NFe mostra a partilha.\n"
             "• Produtos comuns em ST (varia por estado): bebidas, combustíveis, "
@@ -300,9 +304,9 @@ RULES: list[FiscalRule] = [
             "cadeia.\n"
             "  - ICMS-ST: antecipado pelo substituto, SOMA no total, cobre a cadeia "
             "inteira de uma vez.\n"
-            "  - DIFAL: diferencial de alíquota em operação interestadual (estado de "
-            "destino cobra a diferença); com MOC, cobrado por antecipação do não "
-            "contribuinte.\n\n"
+            "  - DIFAL: diferencial de alíquota em operação interestadual — há no "
+            "uso/consumo (ou ativo imobilizado) de contribuinte e na venda a "
+            "pessoa física/não contribuinte; na revenda não há.\n\n"
             "Se me mandar a nota (número), eu confiro se o ST está correto, qual a MVA "
             "usada e como ele entra no total."
         ),
@@ -708,8 +712,10 @@ RULES: list[FiscalRule] = [
             "• ISS — imposto MUNICIPAL (cobrado pela prefeitura): incide sobre os "
             "SERVIÇOS da lista da LC 116/2003 (TI, engenharia, advocacia, "
             "contabilidade, saúde, educação, eventos…).\n"
-            "• Alíquota: o ICMS é definido pelo ESTADO (SP: 18% interno; 4%/7%/12% "
-            "interestadual). O ISS é definido pelo MUNICÍPIO (2% a 5% por código de "
+            "• Alíquota: o ICMS é definido pelo ESTADO (SP: 18% interno; "
+            "interestadual 4% para importados, 7% da origem no Sul/Sudeste com "
+            "destino no Norte, Nordeste, Centro-Oeste ou ES, 12% nos demais "
+            "casos). O ISS é definido pelo MUNICÍPIO (2% a 5% por código de "
             "serviço).\n"
             "• Base de cálculo: ICMS = valor da operação (mercadoria + frete + "
             "seguro). ISS = valor do serviço.\n"
@@ -767,21 +773,32 @@ RULES: list[FiscalRule] = [
                   "diferencial de aliquota de icms", "diferencial de icms",
                   "mof", "icms interestadual", "difal do icms", "difal da nfe",
                   "difal da nota"),
-        digest="DIFAL: operação interestadual — estado de destino cobra a diferença entre a alíquota interna dele e a interestadual (4%/7%/12%); MOC = destinatário não contribuinte.",
+        digest="DIFAL: em operação interestadual de mercadoria, DIFAL = alíquota interna do destino − a interestadual (4% importados; 7% origem Sul/Sudeste exceto ES -> Norte, Nordeste, Centro-Oeste ou ES; 12% demais casos); há DIFAL no uso/consumo (ativo imobilizado) de contribuinte (recolhe o destinatário) e na venda a pessoa física/não contribuinte (recolhe o remetente); revenda não tem DIFAL.",
         text=(
             "🧮 DIFAL — diferencial de alíquota de ICMS (EC 87/2015)\n"
-            "• Em operação INTERESTADUAL, a alíquota aplicada é a interestadual: 4% (com crédito), "
-            "7% (sem crédito) ou 12% (mesma região, com crédito).\n"
-            "• O DIFAL é a DIFERENÇA entre a alíquota interna do estado de DESTINO e a interestadual. "
-            "Ex.: venda de SP para MG, ambos 18% interno → origem cobra 4% (ou 12%) e destino cobra "
-            "os 14% de diferença.\n"
-            "• MOC (mecanismo de obrigatoriedade de cobrança): destinatário NÃO CONTRIBUINTE "
-            "(ex.: pessoa física) → o DIFAL é cobrado por antecipação (substituição tributária).\n"
+            "• Alíquota interestadual (Res. SF 22/1989 e 13/2012): 4% para bens "
+            "importados; 7% quando a origem é do Sul/Sudeste (PR, SC, RS, SP, RJ, MG) "
+            "e o destino é Norte, Nordeste, Centro-Oeste ou ES; 12% nos demais casos "
+            "(inclui operações entre estados do Sul/Sudeste).\n"
+            "• O DIFAL é a DIFERENÇA entre a alíquota interna do estado de DESTINO e a "
+            "interestadual, em pontos percentuais. Ex.: PA → MG: interestadual 12%, "
+            "interna de MG 18% → DIFAL de 6 pontos percentuais. Ex.: MG → GO: "
+            "interestadual 7%, interna de GO 17% → DIFAL de 10 pontos percentuais.\n"
+            "• Quando há DIFAL em operação interestadual de mercadoria:\n"
+            "  - destinatário CONTRIBUINTE que vai USAR/CONSUMIR ou imobilizar o bem "
+            "(ativo imobilizado): há DIFAL — em regra o DESTINATÁRIO recolhe ao "
+            "estado de destino;\n"
+            "  - destinatário PESSOA FÍSICA ou NÃO CONTRIBUINTE (consumidor final): "
+            "há DIFAL — o REMETENTE recolhe para o estado de destino;\n"
+            "  - destinatário CONTRIBUINTE que vai REVENDER: não há DIFAL (0%) — o "
+            "ICMS interestadual destacado pela origem é aproveitado como crédito.\n"
             "• Na NFe, o DIFAL aparece destacado (\"ICMS DIFAL\" / \"ICMS Interestadual DIFAL\") e "
             "SOMA no total do documento.\n"
             "• Operação interna (mesmo estado) não gera DIFAL.\n\n"
             "Se a pergunta for sobre uma nota específica, me dê o número dela (ex.: "
-            "\"o DIFAL da nota 123?\") que eu confiro o que está destacado."
+            "\"o DIFAL da nota 123?\") que eu confiro o que está destacado.\n\n"
+            "Confirme a alíquota interna e as regras do estado de destino com seu "
+            "contador."
         ),
         topic="difal",
     ),
@@ -813,11 +830,14 @@ RULES: list[FiscalRule] = [
         keywords=("aliquotas", "aliquota", "tabela de aliquotas", "quais as aliquotas",
                   "aliquota de icms", "aliquota do icms", "aliquota de pis",
                   "aliquota de cofins"),
-        digest="Resumo: ICMS SP 18% interno / 4-7-12% interestadual; ISS 2-5% (município); PIS 0,65%; COFINS 3%/4%; IPI 0-30%+ (TIPI); IRPJ 15%+10% (ADIR); CSLL 9%; IRRF 7,5-27,5% (tabela).",
+        digest="Resumo: ICMS SP 18% interno / interestadual 4% (importados), 7% (Sul/Sudeste exceto ES -> Norte, Nordeste, Centro-Oeste ou ES), 12% (demais); ISS 2-5% (município); PIS 0,65%; COFINS 3%/4%; IPI 0-30%+ (TIPI); IRPJ 15%+10% (ADIR); CSLL 9%; IRRF 7,5-27,5% (tabela).",
         text=(
             "📊 Alíquotas principais (resumo)\n"
-            "• ICMS (SP): 18% interno; interestadual 4% (com crédito), 7% (sem crédito) ou 12% "
-            "(mesma região, com crédito); DIFAL = diferença até a alíquota interna do destino.\n"
+            "• ICMS (SP): 18% interno; interestadual 4% (bens importados), 7% (origem "
+            "no Sul/Sudeste exceto ES com destino no Norte, Nordeste, Centro-Oeste ou "
+            "ES), 12% (demais casos); DIFAL = diferença até a alíquota interna do "
+            "destino (uso/consumo ou ativo imobilizado de contribuinte e venda a "
+            "pessoa física/não contribuinte; revenda não tem DIFAL).\n"
             "• ISS: 2% a 5% — definida pelo MUNICÍPIO para cada código LC 116/2003 "
             "(minha tabela cobre SP, Campinas, Sorocaba, Jundiaí e Osasco).\n"
             "• PIS: 0,65% da receita.  COFINS: 3% (cumulativo) ou 4% (não cumulativo).\n"
@@ -1062,27 +1082,24 @@ RULES: list[FiscalRule] = [
          ),
      ),
     FiscalRule(
-        title="SPED — prazos e penalidades por atraso na entrega",
+        title="SPED e EFD — fora do escopo",
         keywords=("sped", "sped fiscal", "sped contabil", "sped contábil",
                   "atraso na entrega do sped", "penalidades do sped",
                   "penalidade do sped", "multa do sped", "nao entrego o sped",
                   "entrega do sped", "penalidade", "penalidades",
                   "efd", "efd icms", "ecd", "ecf", "efc"),
-        digest="SPED (EFD-ICMS/IPI, EFD-Contribuições, ECD/ECF): EFD até o último dia útil do mês seguinte; atraso: multa de R$ 2,00/dia limitada a R$ 2.000 (Resolução CGSI 41/2015); não entrega: multa + risco de bloqueio do CNPJ.",
+        digest="SPED/EFD (prazos de pagamento e de entrega, penalidades e multas): FORA DO ESCOPO deste bot — não respondemos esse tema.",
         text=(
-            "📅 SPED — penalidades por atraso na entrega\n"
-            "• O SPED (Sistema Público de Escrituração Digital) reúne as escrituras "
-            "digitais obrigatórias: EFD-ICMS/IPI (fiscal), EFD-Contribuições e ECD/ECF "
-            "(contábil).\n"
-            "• EFD (fiscal): prazo = último dia útil do mês seguinte ao mês de "
-            "referência. Atraso na entrega: multa de R$ 2,00 por dia-calendário de "
-            "atraso, limitada a R$ 2.000,00 (Resolução CGSI 41/2015 da RFB).\n"
-            "• Não entrega: multa (penalidade) + risco de BLOQUEIO do CNPJ e de "
-            "impedimento para obter certidões negativas.\n"
-            "• ECD/ECF (contábil): também há multa de mora por dia de atraso (com "
-            "teto), apurada pela RFB.\n"
-            "• O valor exato sai no auto de infração — pague-o ou peça a defesa "
-            "administrativa (impugnação/revogação)."
+            "🚫 Esse assunto está fora do escopo deste bot\n"
+            "• Prazos (de pagamento e de entrega) do SPED e da EFD, além de "
+            "penalidades e multas dessas obrigações, estão FORA DO ESCOPO — não "
+            "respondo sobre esse tema.\n"
+            "• Para isso, fale com o seu contador ou consulte o portal do SPED / "
+            "e-CAC da RFB.\n\n"
+            "Segue à disposição com as dúvidas DENTRO do escopo: ISS, ICMS, "
+            "ICMS-ST, DIFAL, PIS, COFINS, IPI, IRPJ, CSLL, INSS, IRPF, regimes "
+            "(MEI, Simples, Presumido, Real), retenções, parcelamento, multa/juros "
+            "por atraso e notas fiscais."
         ),
     ),
     FiscalRule(

@@ -146,7 +146,7 @@ class TaxAdvisor:
             # ("tem DIFAL na nota de BH?")
             if case is not None and (not self._DOC_RE.search(t)
                                      or (case.origin and case.destination)):
-                return answer_difal_case(case) + self.CLOSING, None
+                return answer_difal_case(case, text=text) + self.CLOSING, None
         # dúvida genérica anunciada ("tenho dúvida de DIFAL") com notas na
         # conversa: sem nota citada e sem pergunta específica, o bot raciocina
         # a intenção ANTES de calcular — não sequestra a dúvida com uma nota
@@ -213,7 +213,7 @@ class TaxAdvisor:
             "• IRPF: cálculo (carnê-leão), rescisão trabalhista, ganho de capital, DIRPF\n"
             "• MEI + CLT ao mesmo tempo, pensionista, empregado no MEI\n"
             "• Retenções na fonte (IR, CSLL, PIS, COFINS, ISS)\n"
-            "• Multa/juros por atraso, parcelamento de débitos e SPED (prazos e penalidades)\n"
+            "• Multa/juros por atraso e parcelamento de débitos\n"
             "• Uma nota específica: 'qual o ISS da nota 123?', 'tem retenção na NF 456?'\n"
             "• O conjunto das notas/extrato: 'qual nota tem retenção?', 'resumo dos impostos'"
             + self.CLOSING
@@ -791,7 +791,9 @@ class TaxAdvisor:
                 pct = tl.rate / Decimal(100) if tl.rate > 1 else tl.rate
                 if "ICMS" in n and "ST" not in n:
                     lines.append(f"• {tl.name}: alíquota na nota {pct:.2%} (referência SP: "
-                                 "18% interno; 4%/7%/12% interestadual).")
+                                 "18% interno; interestadual 4% importados, 7% "
+                                 "Sul/Sudeste -> Norte, Nordeste, Centro-Oeste ou ES, "
+                                 "12% nos demais casos).")
                 elif "ST" in n or "SUBSTITUI" in n:
                     lines.append(f"• {tl.name}: alíquota efetiva {pct:.2%} — definida por "
                                  "legislação/convênio estadual (não há tabela única).")
@@ -997,8 +999,12 @@ class TaxAdvisor:
             lines = ["• " + self._tax_line_detail(tl) for tl in difal]
             lines.append(
                 "O DIFAL é o diferencial de alíquota do ICMS em operação interestadual "
-                "(EC 87/2015): o estado de origem cobra a alíquota interestadual (4%/7%/12%) e o "
-                "estado de destino cobra a diferença até a alíquota interna dele."
+                "(EC 87/2015): a origem cobra a alíquota interestadual (4% para bens "
+                "importados; 7% da origem no Sul/Sudeste com destino no Norte, "
+                "Nordeste, Centro-Oeste ou ES; 12% nos demais casos) e o DIFAL é a "
+                "diferença até a alíquota interna do destino — há DIFAL no "
+                "uso/consumo (ou ativo imobilizado) de contribuinte e na venda a "
+                "pessoa física/não contribuinte; na revenda não há."
             )
             return lines
         nft = (a.nf_type or "").upper()
@@ -1012,8 +1018,10 @@ class TaxAdvisor:
         else:
             lines.append("• Não identifiquei ICMS (nem DIFAL) nesta nota.")
         lines.append(
-            "Lembrete: em venda interestadual a não contribuinte (MOC), o DIFAL é cobrado por "
-            "antecipação pelo estado de destino."
+            "Lembrete: em operação interestadual há DIFAL no uso/consumo (ou ativo "
+            "imobilizado) de contribuinte — recolhido pelo destinatário — e na venda "
+            "a pessoa física/não contribuinte — recolhido pelo remetente; em revenda "
+            "não há DIFAL."
         )
         return lines
 
@@ -1429,10 +1437,17 @@ class TaxAdvisor:
             "Você é contador brasileiro, especialista em tributos (ISS, ICMS, DIFAL, "
             "ICMS-ST, PIS, COFINS, IPI, IRPJ, CSLL, INSS, IRPF), regimes (MEI, Simples "
             "Nacional, Lucro Presumido, Lucro Real) e temas de pessoa física (rescisão, "
-            "ganho de capital, DIRPF, SPED). Responda a pergunta do cliente de forma "
+            "ganho de capital, DIRPF). Responda a pergunta do cliente de forma "
             "DIRETA e objetiva (máx. 5 linhas, pt-BR). Não fuja da pergunta; se a "
             "resposta depender de dados que você não tem, diga o que depende e o que "
-            "falta. Alíquotas de referência: ICMS SP 18% interno, 4/7/12% interestadual; "
+            "falta. Alíquotas de referência: ICMS SP 18% interno; interestadual 4% "
+            "(bens importados), 7% (origem no Sul/Sudeste — PR, SC, RS, SP, RJ, MG — "
+            "com destino no Norte, Nordeste, Centro-Oeste ou ES) e 12% (demais casos); "
+            "DIFAL = alíquota interna do destino − interestadual (em pontos "
+            "percentuais): há DIFAL no uso/consumo (ou ativo imobilizado) de "
+            "contribuinte e na venda a pessoa física/não contribuinte; em revenda "
+            "não há DIFAL. Sempre termine com: \"Confirme a alíquota interna e as "
+            "regras do estado de destino com seu contador.\" "
             "ISS 2-5% (município, não muda com o regime); PIS 0,65%; COFINS 3%/4%; "
             "IPI 0-30% (TIPI); IRPJ 15%+10%; CSLL 9%; retenções IR 1,5/3%, CSLL 1/3%, "
             "PIS 1,65%, COFINS 7,6%, ISS 2/3%. Dados de referência: IRPF mensal "
@@ -1442,9 +1457,12 @@ class TaxAdvisor:
             "carência); MEI+CLT ao mesmo tempo é permitido; rescisão: parte "
             "indenizatória isenta (Lei 7.713/88 art. 6 V), parte salarial tributada "
             "na fonte com restituição na DIRPF; ganho de capital 15% (imóvel isento "
-            "até R$ 440 mil/ano; ações isentas até R$ 20 mil/mês; FII 20%); SPED: "
-            "EFD até o último dia útil do mês seguinte, multa de atraso R$ 2,00/dia "
-            "limitada a R$ 2.000.\n\n"
+            "até R$ 440 mil/ano; ações isentas até R$ 20 mil/mês; FII 20%). "
+            "Prazos de SPED e EFD (pagamento/entrega) e suas penalidades estão "
+            "FORA DO ESCOPO deste bot: se o cliente perguntar sobre isso, diga "
+            "simplesmente que está fora do escopo e volte ao que está dentro "
+            "(ISS, ICMS, DIFAL, PIS, COFINS, IPI, IRPJ, CSLL, INSS, IRPF, regimes, "
+            "retenções e notas).\n\n"
             f"NOTAS DESTA CONVERSA:\n{notes}\n\n"
             'Responda SOMENTE JSON válido: {"reply": "<resposta>"}'
         )

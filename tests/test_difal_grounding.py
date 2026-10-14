@@ -54,13 +54,21 @@ def _nfse() -> InvoiceAudit:
 def test_difal_caso_hipotetico_responde_o_caso():
     # pergunta que descreve um CASO (origem/destino + natureza): resposta
     # direta sobre o caso — mesmo com notas na conversa, não é sequestrada
-    # por elas (SP -> MG, mesma região: 18% - 12% = 6% de DIFAL)
+    # por elas. Sem saber se é revenda ou consumidor final, o bot PERGUNTA
+    # (não responde "sim" direto)
     adv = TaxAdvisor()
     audits = [_nfe_difal(), _nfe_interna(), _nfse()]
     ans = adv.answer("se eu comprar de SP pra MG, tem DIFAL? me explica", audits)
-    assert "Sim" in ans
-    assert "6%" in ans
+    assert "Sim" not in ans
+    assert "consumidor final" in ans.lower()
     assert "NFe 1234" not in ans
+    # completa o caso (junção que o bot faz na conversa): SP -> MG 12%,
+    # interna MG 18% -> DIFAL 6%
+    ans2 = adv.answer(
+        "se eu comprar de SP pra MG, tem DIFAL? me explica "
+        "será para um consumidor final", audits)
+    assert "6 pontos percentuais" in ans2
+    assert "NFe 1234" not in ans2
 
 
 def test_difal_generica_com_notas_ancorada():
