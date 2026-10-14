@@ -1,0 +1,63 @@
+# Configuração do Assistente de Conciliação
+# Segredos (token do Telegram, etc.) devem vir por variável de ambiente,
+# não por aqui. Veja .env.example.
+
+llm:
+  enabled: true
+  base_url: http://localhost:11434   # ou env OLLAMA_BASE_URL
+  model: llama3.2:1b-instruct-q4_K_M # ou env OLLAMA_MODEL
+  timeout: 600                       # CPU fraca (Celeron): LLM demora; timeout curto = fallback genérico
+  num_ctx: 2048                      # contexto p/ conversa (menor = mais rápido)
+
+# Bot conversacional (python bot.py)
+bot:
+  # template = rápido e estável | auto = LLM se disponível | llm
+  # ESTA CPU (Celeron N4020) deixa o LLM local demorar 5-20min por resposta —
+  # por isso o bot fica em template (respostas instantâneas e específicas).
+  mode: template
+  sessions_dir: data/sessions
+  history_turns: 3    # turnos de conversa mantidos p/ o LLM (menor = prompt menor = mais rápido)
+  auto_run: true      # roda a conciliação sozinho quando extrato+faturas chegam
+  pipeline_llm: false # true = usa LLM na conciliação (lento); false = determinístico (rápido)
+  extract_with_llm: false  # true = foto passa pelo LLM; false = regex determinística (rápido)
+  allowed_chat_ids: []  # vazio = aceita qualquer chat; ou [123456789]
+
+matching:
+  amount_tolerance: "0.01"           # diferença máxima de valor p/ considerar igual (R$)
+  date_window_days: 15               # janela de dias ao redor do vencimento p/ match por valor+data
+  name_threshold: 0.82               # similaridade mínima de nome p/ match
+  fuzzy_confidence_threshold: 0.55   # confiança mínima p/ aceitar match sugerido pelo LLM
+  late_tolerance_days: 0             # dias de atraso tolerados antes de alertar
+  low_confidence_threshold: 0.50     # abaixo disso, o match vira alerta de baixa confiança
+
+# OCR de fotos de fatura (requer: sudo apt-get install tesseract-ocr tesseract-ocr-por)
+ocr:
+  enabled: true
+  tesseract_bin: tesseract
+  languages: por+eng     # pacotes de idioma do tesseract
+  psm: 3                 # 3 = página automática; 6 = bloco único (doc limpo)
+  timeout: 120
+
+# Auditoria fiscal (verificação do cálculo de impostos)
+tax:
+  tolerance: "0.05"      # diferença máxima (R$) p/ considerar o cálculo do imposto correto
+
+# Busca de notas no e-mail (caminho 2 do bot: "buscar no email")
+# Para ativar: enabled: true + EMAIL_IMAP_USER e EMAIL_IMAP_PASSWORD no .env.
+# No Gmail, use uma "senha de app" (https://myaccount.google.com/apppasswords).
+email:
+  enabled: true
+  host: imap.gmail.com
+  port: 993
+  folder: INBOX
+  days_back: 31        # sem período dito no chat, busca os últimos N dias
+  subject_keywords: [nota, nf-, nfe, nfse, fatura, invoice]
+  max_files: 50
+
+paths:
+  inbox: data/inbox
+  reports: data/reports
+
+telegram:
+  enabled: true
+  # token e chat_id vêm de TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID (env)

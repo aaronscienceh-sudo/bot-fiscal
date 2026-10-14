@@ -1,5 +1,4 @@
 .git/
-tests/
 *.db
 *.log
 node_modules/
@@ -21,3 +20,8 @@ data/reports/*.md
 
 # SO
 .DS_Store
+
+# Dados e saidas que podem conter informacao real
+data/*
+logs/
+opencode.json
