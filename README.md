@@ -11,7 +11,7 @@ Bot de Telegram que automatiza rotinas fiscais: busca notas fiscais no e-mail, c
 
 ## Tecnologias
 
-Python, Telegram Bot API, IMAP, Ollama (LLM local) para cálculo e conciliação, parsing de PDF/CSV/OFX/XML.
+Python, Telegram Bot API, IMAP, parsing de PDF/CSV/OFX/XML. O cálculo de impostos segue regras determinísticas; um LLM local pequeno (Llama 3.2 1B, via Ollama) ajuda a classificar faturas, ler notas escaneadas e responder perguntas livres, com fallback caso o modelo esteja indisponível.
 
 ## Como rodar
 
