@@ -42,6 +42,15 @@ ocr:
 tax:
   tolerance: "0.05"      # diferença máxima (R$) p/ considerar o cálculo do imposto correto
 
+# Supervisor (IA de governança): audita a sessão quando o bot processa
+# arquivos/relatórios e manda os achados médio+ no chat (em segundo plano;
+# relatório completo em <sessão>/reports/supervisor_*.md).
+# Achado CRÍTICO/ALTO também vai para o chat de administração (TELEGRAM_CHAT_ID);
+# auditoria completa (logs + todas as sessões): python3 auditoria.py [--notify]
+supervisor:
+  live: true        # false = desliga a auditoria automática no chat
+  live_ocr: false   # true = repassa fotos pelo Tesseract na auditoria (lento)
+
 # Busca de notas no e-mail (caminho 2 do bot: "buscar no email")
 # Para ativar: enabled: true + EMAIL_IMAP_USER e EMAIL_IMAP_PASSWORD no .env.
 # No Gmail, use uma "senha de app" (https://myaccount.google.com/apppasswords).

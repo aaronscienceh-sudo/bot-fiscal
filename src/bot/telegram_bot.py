@@ -44,6 +44,12 @@ from ..notify.telegram import TelegramNotifier
 from ..parsing import OCRError, ocr_image, parse_directory, parse_file
 from ..reporting import write_report
 
+_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
+
+
+def redact(texto):
+    return _TOKEN_RE.sub("XXXX", str(texto))
+
 
 WELCOME = (
     "👋 Olá! Sou o assistente de conciliação e auditoria de faturas.\n\n"
@@ -160,6 +166,7 @@ class ChatSession:
     pending_difal_text: str | None = None  # caso de DIFAL aguardando estado/natureza
     pending_email_period: bool = False  # "buscar no email" aguardando mês/data
     last_discussed: InvoiceAudit | None = None  # nota em pauta: última analisada/consultada
+    last_supervisor: object | None = None       # último AuditoriaReport do supervisor
 
     @property
     def has_extrato(self) -> bool:
@@ -329,6 +336,24 @@ _HOME_RE = re.compile(
 
 def is_home(text: str) -> bool:
     return bool(_HOME_RE.search(text))
+
+
+# --------------------------------------------------------------------------- #
+# Supervisor (governança): auditoria desta sessão sob demanda
+# --------------------------------------------------------------------------- #
+# Texto fechado de propósito: não pode casar com "auditoria fiscal" das notas
+# (fluxo do advisor) nem com pedidos de relatório/alerta da conciliação.
+_SUPERVISOR_RE = re.compile(
+    r"^\s*/?(?:supervisor(?:@\w+)?"
+    r"|auditar\s+sess(?:a|ã)o"
+    r"|auditoria\s+(?:d[ae]\s+sess(?:a|ã)o|do\s+bot))"
+    r"\s*[.!?:]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_supervisor_request(text: str) -> bool:
+    return bool(_SUPERVISOR_RE.match(text))
 
 
 # --------------------------------------------------------------------------- #
@@ -504,7 +529,8 @@ class TemplateBrain:
             "• 'rodar' — concilia agora\n"
             "• 'listar arquivos' — mostra o que já recebi\n"
             "• 'recomeçar' — limpa a conversa\n"
-            "• 'buscar no email' — puxo as notas da sua caixa de entrada e concilio\n\n"
+            "• 'buscar no email' — puxo as notas da sua caixa de entrada e concilio\n"
+            "• '/supervisor' — auditoria desta sessão (governança do bot)\n\n"
             "Como posso te ajudar?"
         )
 
@@ -616,6 +642,11 @@ class ConciliationAgent:
         self.advisor = advisor or TaxAdvisor()
         # caminho 2: busca de notas no e-mail do cliente (IMAP); None = desligado
         self.email_cfg = build_email_config(cfg)
+
+        # auditoria ao vivo (supervisor): 1 thread por chat, com coalescing
+        self._sup_lock = threading.Lock()
+        self._sup_running: set[int] = set()
+        self._sup_pending: set[int] = set()
 
         # auditoria fiscal de fotos
         self.extract_llm = extract_llm or FallbackClient()
@@ -1253,6 +1284,10 @@ class ConciliationAgent:
                     f"{session.files_label()} — digite 'listar arquivos' para ver.")
             return resp
 
+        # supervisor (governança): auditoria desta sessão sob demanda
+        if is_supervisor_request(text):
+            return self._supervisor_reply(session)
+
         period = parse_period(text)
         if period:
             session.period = period
@@ -1602,6 +1637,130 @@ class ConciliationAgent:
         resp.csv_path = csv_path
         resp.md_path = md_path
 
+    # -- governança: auditoria ao vivo desta sessão ------------------------ #
+    def supervisor_audit(self, session: ChatSession) -> None:
+        """Auditoria do supervisor (IA de governança) desta sessão.
+
+        Roda EM SEGUNDO PLANO: reparsar os arquivos leva ~10s e o usuário não
+        deve esperar por isso. Ao terminar, achados médio+ viram uma mensagem
+        própria no chat e o relatório completo fica em <sessão>/reports/.
+
+        Só detecta e relata — o único arquivo gravado é o relatório do próprio
+        supervisor. A governança nunca pode derrubar o sistema auditado.
+
+        OCR de fotos fica de fora por padrão (repetir Tesseract a cada arquivo
+        novo atrasaria tudo); `supervisor.live_ocr: true` no config.yaml
+        habilita e a auditoria completa (`python3 auditoria.py`) cobre as fotos.
+        """
+        if not (self.cfg.get("supervisor") or {}).get("live", True):
+            return
+        chat = session.chat_id
+        with self._sup_lock:
+            if chat in self._sup_running:
+                # já tem auditoria em andamento: ela cobre o estado atual;
+                # marca para rodar de novo quando terminar (nada se perde)
+                self._sup_pending.add(chat)
+                return
+            self._sup_running.add(chat)
+        threading.Thread(target=self._supervisor_work, args=(session,),
+                         name=f"supervisor-{chat}", daemon=True).start()
+
+    def _supervisor_reply(self, session: ChatSession) -> BotResponse:
+        """Resposta ao comando '/supervisor': mostra a última auditoria e
+        dispara uma nova em segundo plano (o resultado chega em seguida)."""
+        resp = BotResponse()
+        last = session.last_supervisor
+        if last is None:
+            resp.texts.append("🛡️ Ainda não auditei esta sessão.")
+        elif last.findings:
+            sev = last.by_severity
+            resp.texts.append(
+                f"🛡️ Última auditoria ({last.generated_at:%d/%m %H:%M}): "
+                f"{len(last.findings)} achado(s) "
+                f"(🚨 {sev['critical']} · 🔴 {sev['high']} · "
+                f"🟠 {sev['medium']} · 🟡 {sev['low']}).")
+            graves = [f for f in last.findings
+                      if f.severity.value in ("critical", "high", "medium")]
+            for fd in graves[:3]:
+                resp.texts.append(f"• {redact(fd.message)}")
+            if len(graves) > 3:
+                resp.texts.append(f"… e mais {len(graves) - 3} — o relatório "
+                                  "completo fica em reports/.")
+        else:
+            resp.texts.append("🛡️ Última auditoria desta sessão: "
+                              "nenhum problema encontrado.")
+        resp.texts.append("🔄 Rodando uma auditoria nova agora — aviso em "
+                          "alguns segundos, mas só se achar algo.")
+        self.supervisor_audit(session)
+        return resp
+
+    def _supervisor_work(self, session: ChatSession):
+        """Loop da thread do supervisor: audita e repete se houve gatilho novo."""
+        chat = session.chat_id
+        try:
+            while True:
+                try:
+                    self._supervisor_once(session)
+                except Exception as e:  # noqa: BLE001
+                    print(f"   ⚠️ supervisor falhou (auditoria ignorada): {redact(e)}")
+                with self._sup_lock:
+                    if chat not in self._sup_pending:
+                        return
+                    self._sup_pending.discard(chat)
+        finally:
+            with self._sup_lock:
+                self._sup_running.discard(chat)
+
+    def _supervisor_once(self, session: ChatSession) -> None:
+        """Uma rodada de auditoria desta sessão: roda, grava e avisa o chat."""
+        from ..supervisor import run_session_audit, send_alert, write_audit_markdown
+
+        cfg = dict(self.cfg)
+        if not (cfg.get("supervisor") or {}).get("live_ocr", False):
+            cfg["ocr"] = {**(cfg.get("ocr") or {}), "enabled": False}
+        report = run_session_audit(cfg, session.workdir)
+        session.last_supervisor = report
+        # achado grave (🚨/🔴) também vai para o chat de administração —
+        # o resumo do usuário cobre só o que é desta conversa
+        admin = str((self.cfg.get("telegram") or {}).get("chat_id") or "")
+        if admin and admin != str(session.chat_id):
+            try:
+                send_alert(report, self.cfg,
+                           title=f"SUPERVISOR · sessão {session.chat_id}")
+            except Exception as e:  # noqa: BLE001
+                print(f"   ⚠️ supervisor não alertou o admin: {redact(e)}")
+        if not report.findings:
+            return
+
+        # relatório completo em reports/ (mantém os 10 mais novos)
+        name = f"supervisor_{time.strftime('%Y%m%d_%H%M%S')}.md"
+        reports_dir = session.workdir / "reports"
+        try:
+            write_audit_markdown(report, reports_dir / name)
+            for old in sorted(reports_dir.glob("supervisor_*.md"))[:-10]:
+                old.unlink(missing_ok=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"   ⚠️ supervisor não gravou o relatório: {redact(e)}")
+            name = "(não gravado)"
+
+        # no chat: só médio pra cima — LOW fica só no relatório salvo
+        sev_emoji = {"critical": "🚨", "high": "🔴", "medium": "🟠"}
+        shown = [f for f in report.findings if f.severity.value in sev_emoji]
+        if not shown or self.api is None:
+            return
+        lines = [f"🛡️ SUPERVISOR (auditoria desta sessão): "
+                 f"{len(report.findings)} achado(s). Os mais graves:"]
+        for fd in shown[:3]:
+            cnt = f" (×{fd.count})" if fd.count > 1 else ""
+            lines.append(f"{sev_emoji[fd.severity.value]} {redact(fd.message)}{cnt}")
+        if len(shown) > 3:
+            lines.append(f"… e mais {len(shown) - 3} (detalhes no relatório).")
+        lines.append(f"Relatório completo: reports/{name}")
+        try:
+            self.api.send_text(session.chat_id, "\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            print(f"   ⚠️ supervisor não enviou o resumo: {redact(e)}")
+
     @staticmethod
     def _dedup(items: list, key_fn) -> list:
         """Mantém apenas a primeira ocorrência de cada chave (ordem preservada)."""
@@ -1646,6 +1805,7 @@ class ConciliationAgent:
         session.last_discussed = None
         session.pending_difal_text = None
         session.pending_email_period = False
+        session.last_supervisor = None
 
 
 # --------------------------------------------------------------------------- #
@@ -1654,6 +1814,8 @@ class ConciliationAgent:
 def _dispatch(agent: ConciliationAgent, api: TelegramAPI,
               session: ChatSession, msg: dict) -> BotResponse:
     base = BotResponse()
+    files_before = session.file_count
+    report_before = session.last_report
     if not session.welcomed:
         # se a 1ª mensagem já é um cumprimento, handle_text envia o welcome
         # caloroso; se já é "voltar ao início", handle_text envia o welcome
@@ -1683,6 +1845,11 @@ def _dispatch(agent: ConciliationAgent, api: TelegramAPI,
     base.audits = r.audits
     base.csv_path = r.csv_path
     base.md_path = r.md_path
+    # governança: audita a sessão só quando algo mudou (arquivo novo ou
+    # relatório novo) — mensagem de conversa pura não gasta auditoria.
+    # A auditoria roda em segundo plano e manda o resumo sozinha.
+    if session.file_count > files_before or session.last_report is not report_before:
+        agent.supervisor_audit(session)
     return base
 
 
@@ -1695,7 +1862,7 @@ def _send_response(api: TelegramAPI, chat_id, resp: BotResponse):
         try:
             api.send_text(chat_id, t)
         except Exception as e:  # noqa: BLE001
-            print(f"   ❌ falha ao enviar texto ({type(e).__name__}): {e}")
+            print(f"   ❌ falha ao enviar texto ({type(e).__name__}): {redact(e)}")
     if resp.report is not None:
         try:
             api.send_text(chat_id, TelegramNotifier.build_summary(resp.report),
@@ -1707,7 +1874,7 @@ def _send_response(api: TelegramAPI, chat_id, resp: BotResponse):
             if resp.md_path:
                 api.send_document(chat_id, resp.md_path, "📝 Relatório legível (Markdown)")
         except Exception as e:  # noqa: BLE001
-            print(f"   ❌ falha ao enviar relatório ({type(e).__name__}): {e}")
+            print(f"   ❌ falha ao enviar relatório ({type(e).__name__}): {redact(e)}")
 
 
 def _audits_summary(audits: list[InvoiceAudit]) -> str:
@@ -1747,7 +1914,7 @@ def run_bot(cfg: dict):
     try:
         me = api.get_me()
     except Exception as e:  # noqa: BLE001
-        print(f"❌ Falha ao falar com o Telegram: {e}")
+        print(f"❌ Falha ao falar com o Telegram: {redact(e)}")
         return
     print(f"🤖 Bot @{me.get('username', '?')} online.")
 
@@ -1802,7 +1969,7 @@ def run_bot(cfg: dict):
             try:
                 updates = api.get_updates(offset, timeout=30)
             except Exception as e:  # noqa: BLE001
-                print(f"[bot] getUpdates: {e}; tentando de novo em 5s")
+                print(f"[bot] getUpdates: {redact(e)}; tentando de novo em 5s")
                 time.sleep(5)
                 continue
             for u in updates:
@@ -1823,7 +1990,7 @@ def run_bot(cfg: dict):
                     session = agent.get_session(chat_id)
                 except Exception:  # noqa: BLE001 - sessão corrompida não mata o loop
                     print(f"[bot] erro ao carregar a sessão do chat {chat_id}:")
-                    traceback.print_exc()
+                    print(redact(traceback.format_exc()))
                     continue
                 print(f"📩 chat={chat_id} tipo={next((k for k in ('document', 'photo', 'text') if k in msg), '?')}")
                 if "text" in msg:
@@ -1837,8 +2004,8 @@ def run_bot(cfg: dict):
                     for t in resp.texts:
                         print(f"   💬 {t.splitlines()[0][:200]!r}")
                 except Exception as e:  # noqa: BLE001
-                    print(f"[bot] erro ao processar: {e}")
-                    traceback.print_exc()
+                    print(f"[bot] erro ao processar: {redact(e)}")
+                    print(redact(traceback.format_exc()))
                     try:
                         api.send_text(chat_id, "⚠️ Ocorreu um erro ao processar. Tente de novo.")
                     except Exception:  # noqa: BLE001 - chat bloqueado não pode derrubar o loop
@@ -1849,4 +2016,4 @@ def run_bot(cfg: dict):
         print("\n👋 Bot encerrado.")
     except Exception:  # noqa: BLE001 - o loop NUNCA pode morrer em silêncio
         print("[bot] erro fatal no loop principal:")
-        traceback.print_exc()
+        print(redact(traceback.format_exc()))
