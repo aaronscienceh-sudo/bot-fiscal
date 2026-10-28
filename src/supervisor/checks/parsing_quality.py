@@ -12,10 +12,11 @@ _MAX_FILES_IN_EVIDENCE = 12
 
 
 def _f(id_: str, severity: Severity, message: str, evidence: str,
-       suggestion: str, count: int = 1, source: str = "") -> Finding:
+       suggestion: str, count: int = 1, source: str = "",
+       files: list[str] | None = None) -> Finding:
     return Finding(id=id_, check="parsing_quality", severity=severity,
                    message=message, evidence=evidence, suggestion=suggestion,
-                   count=count, source=source)
+                   count=count, source=source, files=files or [])
 
 
 def _file_list(files: list[str]) -> str:
@@ -47,6 +48,7 @@ def run(ctx: CheckContext) -> tuple[list[Finding], dict[str, int]]:
     stats["sessions"] = len(chats)
 
     errors: list[str] = []
+    error_files: list[str] = []
     empties: list[str] = []
     unsupported: list[str] = []
     ocr_failed: list[str] = []
@@ -75,6 +77,7 @@ def run(ctx: CheckContext) -> tuple[list[Finding], dict[str, int]]:
         if parsed.errors:
             stats["files_error"] += 1
             errors.append(f"{label} ({'; '.join(parsed.errors)[:100]})")
+            error_files.append(sf.path.name)
         elif not (parsed.transactions or parsed.invoices or parsed.audits):
             if sf.kind == "image" and not sf.ocr_ran:
                 continue  # OCR desligado/indisponível — não é falha
@@ -91,6 +94,7 @@ def run(ctx: CheckContext) -> tuple[list[Finding], dict[str, int]]:
             "Formato malformado ou parser quebrado. Confira o arquivo citado "
             "e o parser correspondente em src/parsing/.",
             count=len(errors),
+            files=error_files,
         ))
     if ocr_failed:
         findings.append(_f(

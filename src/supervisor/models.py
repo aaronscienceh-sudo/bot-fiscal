@@ -31,6 +31,9 @@ class Finding(BaseModel):
     suggestion: str = ""
     count: int = Field(default=1, ge=1)
     source: str = Field(default="", description="Arquivo de origem (log, sessão…)")
+    files: list[str] = Field(
+        default_factory=list,
+        description="Arquivos do usuário ligados ao achado (para mensagem simples no chat)")
 
 
 class AuditoriaReport(BaseModel):

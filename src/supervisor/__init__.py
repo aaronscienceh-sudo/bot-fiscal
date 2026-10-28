@@ -1,6 +1,6 @@
 """Supervisor do Bot Fiscal — audita o bot e relata possíveis erros."""
 from .models import AuditoriaReport, CheckContext, Finding, Severity
-from .notify import build_alert, send_alert
+from .notify import build_alert, build_user_message, send_alert
 from .runner import (
     SESSION_CHECKS,
     discover_log_paths,
@@ -18,6 +18,7 @@ __all__ = [
     "Severity",
     "SESSION_CHECKS",
     "build_alert",
+    "build_user_message",
     "discover_log_paths",
     "run_audit",
     "run_session_audit",

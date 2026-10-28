@@ -1642,8 +1642,10 @@ class ConciliationAgent:
         """Auditoria do supervisor (IA de governança) desta sessão.
 
         Roda EM SEGUNDO PLANO: reparsar os arquivos leva ~10s e o usuário não
-        deve esperar por isso. Ao terminar, achados médio+ viram uma mensagem
-        própria no chat e o relatório completo fica em <sessão>/reports/.
+        deve esperar por isso. Ao terminar, o admin recebe o alerta técnico
+        (médio pra cima) e o usuário, se houver algo que ele possa resolver,
+        recebe uma frase simples e acionável — nunca linguagem de governança.
+        O relatório completo fica em <sessão>/reports/.
 
         Só detecta e relata — o único arquivo gravado é o relatório do próprio
         supervisor. A governança nunca pode derrubar o sistema auditado.
@@ -1712,16 +1714,24 @@ class ConciliationAgent:
                 self._sup_running.discard(chat)
 
     def _supervisor_once(self, session: ChatSession) -> None:
-        """Uma rodada de auditoria desta sessão: roda, grava e avisa o chat."""
-        from ..supervisor import run_session_audit, send_alert, write_audit_markdown
+        """Uma rodada de auditoria desta sessão: roda, grava e avisa.
+
+        O ADMIN recebe o alerta técnico completo (médio pra cima, com fonte,
+        evidência e sugestão). O usuário da conversa recebe, no máximo, uma
+        frase simples e acionável ("não consegui ler o arquivo X, pode
+        reenviar?") — nunca linguagem de governança: severidade, nomes de
+        verificadores e caminhos internos são assunto do admin.
+        """
+        from ..supervisor import (build_user_message, run_session_audit,
+                                  send_alert, write_audit_markdown)
 
         cfg = dict(self.cfg)
         if not (cfg.get("supervisor") or {}).get("live_ocr", False):
             cfg["ocr"] = {**(cfg.get("ocr") or {}), "enabled": False}
         report = run_session_audit(cfg, session.workdir)
         session.last_supervisor = report
-        # achado grave (🚨/🔴) também vai para o chat de administração —
-        # o resumo do usuário cobre só o que é desta conversa
+        # achado médio pra cima vai para o chat de administração (alerta
+        # técnico completo); o usuário da conversa vê só a frase simples abaixo
         admin = str((self.cfg.get("telegram") or {}).get("chat_id") or "")
         if admin and admin != str(session.chat_id):
             try:
@@ -1741,25 +1751,18 @@ class ConciliationAgent:
                 old.unlink(missing_ok=True)
         except Exception as e:  # noqa: BLE001
             print(f"   ⚠️ supervisor não gravou o relatório: {redact(e)}")
-            name = "(não gravado)"
 
-        # no chat: só médio pra cima — LOW fica só no relatório salvo
-        sev_emoji = {"critical": "🚨", "high": "🔴", "medium": "🟠"}
-        shown = [f for f in report.findings if f.severity.value in sev_emoji]
-        if not shown or self.api is None:
+        # no chat do usuário: só uma frase que ELE possa resolver (reenviar
+        # arquivo, por exemplo). Severidade, caminho e verificador ficam com
+        # o admin, no alerta acima. Achado interno (replay, estado, log) não
+        # vira mensagem nenhuma para o usuário.
+        msg = build_user_message(report)
+        if not msg or self.api is None:
             return
-        lines = [f"🛡️ SUPERVISOR (auditoria desta sessão): "
-                 f"{len(report.findings)} achado(s). Os mais graves:"]
-        for fd in shown[:3]:
-            cnt = f" (×{fd.count})" if fd.count > 1 else ""
-            lines.append(f"{sev_emoji[fd.severity.value]} {redact(fd.message)}{cnt}")
-        if len(shown) > 3:
-            lines.append(f"… e mais {len(shown) - 3} (detalhes no relatório).")
-        lines.append(f"Relatório completo: reports/{name}")
         try:
-            self.api.send_text(session.chat_id, "\n".join(lines))
+            self.api.send_text(session.chat_id, msg)
         except Exception as e:  # noqa: BLE001
-            print(f"   ⚠️ supervisor não enviou o resumo: {redact(e)}")
+            print(f"   ⚠️ supervisor não avisou o usuário: {redact(e)}")
 
     @staticmethod
     def _dedup(items: list, key_fn) -> list:
