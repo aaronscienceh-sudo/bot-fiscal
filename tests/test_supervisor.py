@@ -718,3 +718,32 @@ def test_kb_run_smoke():
     assert stats["kb_rules"] > 0
     assert stats["match_smoke_ok"] >= 2
     assert all(f.check == "kb_consistency" for f in findings)
+
+from src.supervisor import build_user_message  # noqa: E402
+from src.supervisor.models import AuditoriaReport, Finding, Severity  # noqa: E402
+
+
+def _relatorio(severity, files):
+    f = Finding(id="t1", check="parsing_quality", severity=severity,
+                message="Arquivos com erro durante o parse", files=files)
+    return AuditoriaReport(findings=[f])
+
+
+def test_mensagem_ao_usuario_cita_um_arquivo():
+    msg = build_user_message(_relatorio(Severity.MEDIUM, ["extrato.csv"]))
+    assert "extrato.csv" in msg
+    assert "Pode reenviar?" in msg
+
+
+def test_mensagem_ao_usuario_cita_varios_arquivos():
+    msg = build_user_message(_relatorio(Severity.MEDIUM, ["a.pdf", "b.pdf"]))
+    assert "2 arquivos" in msg
+    assert "a.pdf" in msg and "b.pdf" in msg
+
+
+def test_mensagem_ao_usuario_none_sem_arquivos():
+    assert build_user_message(_relatorio(Severity.MEDIUM, [])) is None
+
+
+def test_mensagem_ao_usuario_none_se_severidade_baixa():
+    assert build_user_message(_relatorio(Severity.LOW, ["extrato.csv"])) is None
