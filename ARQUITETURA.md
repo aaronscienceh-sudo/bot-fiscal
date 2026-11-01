@@ -32,6 +32,16 @@ flowchart TD
 - **Parsing** (`src/parsing/`): um leitor para cada formato (PDF, CSV, OFX, NF-e, NFS-e e foto por OCR).
 - **Domínio** (`src/domain/`): modelos (`Transaction`, `Invoice`, `MatchResult`, `Inconsistency`), regras determinísticas (`rules.py`), cálculo de impostos (`tax.py`), base de conhecimento fiscal (`fiscal_kb.py`), alíquota interestadual de ICMS (`icms_rates.py`) e casos de DIFAL (`difal_case.py`).
 - **Conciliação** (`src/engine/reconciler.py`): a classe `Reconciler` pareia transações do extrato com faturas e sinaliza divergências, faturas sem pagamento, duplicidades e atrasos. O pareamento usa as regras de `rules.py`, que rodam sem LLM; o LLM entra só como reforço, para classificar e para o pareamento aproximado.
+- **Camada de IA** (`src/llm/`): uma interface comum (`base.py`) que qualquer implementação precisa cumprir: dizer se está disponível, classificar uma fatura, propor um pareamento aproximado e explicar uma inconsistência. A fábrica (`__init__.py`) tenta o Ollama (`ollama_client.py`, que usa a API `/api/chat` com saída JSON) e, se ele não estiver configurado ou disponível, usa o `fallback.py`, que é determinístico (classificação por palavras-chave, pareamento por similaridade de nome e extração por regex). O restante do pipeline não sabe qual dos dois está em uso, então o bot funciona mesmo sem LLM. `invoice_audit.py` transforma o texto do OCR em uma auditoria de fatura.
+- **Conselheiro fiscal** (`src/llm/tax_advisor.py`): responde perguntas sobre tributos e notas em camadas, da mais específica para a mais livre, e o LLM só entra perto do fim:
+  1. Pergunta sobre o caso de DIFAL do cliente: resposta direta sobre o caso.
+  2. Dúvida genérica anunciada, sem nota nem pergunta específica: o bot não calcula sobre uma nota qualquer e pede a nota ou o ponto específico.
+  3. Pergunta sobre uma nota da conversa: resposta com os dados da auditoria fiscal e a tabela da LC 116/2003. Se a nota citada não está na conversa, o bot diz que não a tem e lista as que tem.
+  4. Pergunta sobre o conjunto de notas ou o extrato ("qual nota tem retenção?"): resposta agregada com os dados da sessão.
+  5. Pergunta que casa com a base de conhecimento fiscal: resposta determinística pronta, que funciona sem LLM. Se a conversa já tem notas com o tópico, a resposta é ancorada nelas, e não só na teoria.
+  6. LLM disponível (Ollama): resposta livre, com as regras como contexto.
+  7. Nada casou: mensagem com os tópicos que o bot domina.
+- **Configuração** (`src/config.py`): carrega o `config.yaml` e sobrepõe os segredos com variáveis de ambiente (o `.env`).
 - **Relatório** (`src/reporting/report.py`): grava um CSV detalhado e um Markdown legível.
 - **Notificação** (`src/notify/telegram.py`): envia mensagens e relatórios pelo Telegram, inclusive os alertas do supervisor.
 - **Supervisor** (`src/supervisor/`): 6 verificadores independentes. Ele detecta e relata, e nunca corrige nada sozinho. O `replay` usa o mesmo `Reconciler` para refazer a conciliação com o código atual.
